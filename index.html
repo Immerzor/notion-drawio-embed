@@ -1,4 +1,130 @@
-<head></head>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagram</title>
+<!--
+  Minimal diagram viewer for embedding in Notion. Host as index.html with
+  GitHub Pages (plus an empty .nojekyll file), next to your diagram files.
+
+    https://<owner>.github.io/<repo>/?src=my-diagram.drawio.svg
+
+  Query parameters:
+    src     (required) path to the .svg/.png, relative to this page
+    zoomed  "true" = start zoomed (diagram fills the frame's width, scrolls
+            vertically). Default: whole diagram fitted inside the frame.
+
+  Click toggles zoom. Ctrl+Click (Cmd+Click on Mac) opens the diagram in draw.io.
+  Open without ?src= to get a form that builds the embed URL for you.
+  Assumes the diagram is a light-themed SVG/PNG with its own background.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; color: #222; overflow: hidden; }
+  body { font: 14px system-ui, sans-serif; }
+  #stage {
+    box-sizing: border-box; width: 100%; height: 100%; padding: 8px;
+    display: flex; align-items: center; justify-content: center;
+    overflow: auto; cursor: zoom-in;
+  }
+  #stage > svg, #stage > img { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+
+  /* zoomed: fill the frame's width, no padding, scroll vertically if taller */
+  #stage.zoom { padding: 0; align-items: flex-start; justify-content: flex-start; cursor: zoom-out; }
+  #stage.zoom > svg, #stage.zoom > img { width: 100%; max-width: none; max-height: none; height: auto; }
+
+  #edit {
+    position: fixed; bottom: 8px; right: 8px; padding: 4px 10px; border-radius: 6px;
+    background: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(0,0,0,.12);
+    font-size: 12px; color: #666; opacity: 0; transition: opacity .15s;
+  }
+  #edit a { color: #1a73e8; text-decoration: none; font-weight: 600; }
+  body:hover #edit { opacity: 1; }
+
+  .msg { cursor: default; flex-direction: column; gap: 12px; text-align: center; color: #666; }
+  .msg form { display: flex; gap: 6px; }
+  .msg input { width: 320px; max-width: 60vw; padding: 6px 8px; font: inherit; }
+  .msg button { padding: 6px 12px; font: inherit; cursor: pointer; }
+  .msg small { color: #2a7; min-height: 1em; }
+</style>
+</head>
 <body>
-  <h1>Hello</h1>
+<div id="stage"></div>
+<div id="edit" hidden>Ctrl+Click to <a target="_blank" rel="noopener">Edit</a></div>
+<script>
+// ---- config: where the diagrams live (used to build the "Edit" link) ----
+// Defaults are inferred from https://<owner>.github.io/<repo>/ ; hardcode if needed.
+const OWNER  = location.hostname.split('.')[0];
+const REPO   = location.pathname.split('/')[1];
+const BRANCH = 'main';
+
+(async () => {
+  const p = new URLSearchParams(location.search);
+  const stage = document.getElementById('stage');
+
+  const fail = (t) => { stage.textContent = t; stage.className = 'msg'; };
+
+  // Shown when ?src= is missing/invalid: a tiny embed-URL factory.
+  const showFactory = (reason) => {
+    stage.className = 'msg';
+    stage.innerHTML = '<div></div><form><input name="path" placeholder="path/to-diagram.drawio.svg" autofocus>' +
+      '<button>Copy embed URL</button></form><small></small>';
+    stage.firstChild.textContent = reason;
+    const form = stage.querySelector('form'), note = stage.querySelector('small');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const path = form.path.value.trim();
+      if (!path) return;
+      const url = location.origin + location.pathname + '?src=' +
+        path.split('/').map(encodeURIComponent).join('/');
+      try { await navigator.clipboard.writeText(url); note.textContent = 'Copied: ' + url; }
+      catch { note.textContent = url; }
+    });
+  };
+
+  const src = p.get('src');
+  // Same-site relative paths only: this page injects SVG markup, so it must
+  // never load content from arbitrary other origins.
+  if (!src) return showFactory('Missing ?src=');
+  if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) return showFactory('Invalid ?src= (use a path relative to this page)');
+
+  const editUrl = 'https://app.diagrams.net/#H' + OWNER + '/' + REPO + '/' + BRANCH + '/' + encodeURI(src);
+  const edit = document.getElementById('edit');
+  edit.querySelector('a').href = editUrl;
+  edit.hidden = false;
+
+  try {
+    const res = await fetch(src, { cache: 'no-cache' }); // always revalidate
+    if (!res.ok) return fail('Could not load ' + src + ' (' + res.status + ').');
+
+    if (/\.svg$/i.test(src.split('?')[0])) {
+      // Inline the SVG (not <img>) so web fonts and HTML labels render properly.
+      const doc = new DOMParser().parseFromString(await res.text(), 'image/svg+xml');
+      const svg = doc.documentElement;
+      if (svg.nodeName.toLowerCase() !== 'svg') return fail('Not a valid SVG.');
+      svg.querySelectorAll('script').forEach((s) => s.remove());
+      if (!svg.getAttribute('viewBox')) {
+        const w = parseFloat(svg.getAttribute('width')), h = parseFloat(svg.getAttribute('height'));
+        if (w && h) svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+      }
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      stage.replaceChildren(document.importNode(svg, true));
+    } else {
+      const img = new Image();
+      img.src = URL.createObjectURL(await res.blob());
+      stage.replaceChildren(img);
+    }
+
+    if (p.get('zoomed') === 'true') stage.classList.add('zoom');
+    stage.addEventListener('click', (e) => {
+      if (e.ctrlKey || e.metaKey) { window.open(editUrl, '_blank', 'noopener'); return; }
+      stage.classList.toggle('zoom');
+    });
+  } catch (e) {
+    fail('Failed to load: ' + e.message);
+  }
+})();
+</script>
 </body>
+</html>
